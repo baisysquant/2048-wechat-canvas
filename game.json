@@ -1,0 +1,10 @@
+{
+  "deviceOrientation": "portrait",
+  "renderMode": "canvas",
+  "subpackages": [],
+  "preloadRule": {
+    "network": "all",
+    "packages": []
+  },
+  "plugins": {}
+}
