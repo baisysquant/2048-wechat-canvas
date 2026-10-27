@@ -36,7 +36,7 @@
     }
   },
   "compileType": "game",
-  "libVersion": "latest",
+  "libVersion": "3.16.2",
   "appid": "wx909af6c0bf2804ef",
   "projectname": "FK2048-Native",
   "simulatorType": "wechat",

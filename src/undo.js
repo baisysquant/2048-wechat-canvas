@@ -43,7 +43,7 @@
             if (st !== GameState.PLAYING && st !== GameState.GAME_OVER) return;
 
             if (!this._undoHistory || this._undoHistory.length === 0) {
-                this.showToastSafe('没有可回撤的操作');
+                this.showHint('没有可回撤的操作');
                 return;
             }
 
@@ -51,14 +51,13 @@
             if (this._undoFreeLeft > 0) {
                 this._undoFreeLeft--;
                 const remain = this._undoFreeLeft;
-                this.applyUndo();
-                this.showToastSafe(remain > 0 ? `后悔成功，本局还可免费 ${remain} 次` : '后悔成功，免费次数已用完');
+                this.applyUndo(remain > 0 ? `免费剩 ${remain} 次` : '免费次数已用完');
                 return;
             }
 
             if (DEBUG_SKIP_AD) {
                 this.trackSpecial('debug_skip_ad', { scene: 'undo' });
-                try { wx.showToast({ title: '调测模式：跳过广告', icon: 'none' }); } catch (e) { }
+                this.showHint('调测模式：跳过广告');
                 this.applyUndo();
                 return;
             }
@@ -70,13 +69,12 @@
         // 广告完整观看后回撤
         onUndoAdReward() {
             try { wx.hideLoading(); } catch (e) { }
-            this.overlayButtons = null;
+            this.clearOverlay();
             this.applyUndo();
-            this.showToastSafe('后悔成功');
         },
 
         // ---------- 执行回撤 ----------
-        applyUndo() {
+        applyUndo(suffix) {
             const history = this._undoHistory || [];
             if (history.length === 0) return;
 
@@ -88,7 +86,7 @@
             // 还原棋盘与分数
             this.grid = target.grid.map(row => row.slice());
             this.score = target.score;
-            this.overlayButtons = null;
+            this.clearOverlay();
             this.closeSpecialPanel();
             this.syncTilesWithGrid();
 
@@ -104,7 +102,7 @@
             }
 
             try { if (wx.vibrateShort) wx.vibrateShort({ type: 'light' }); } catch (e) { }
-            this.pushFloatText(`↩ 已回撤 ${k} 步`, this.width / 2, this.height / 2 - 60, 1200, 24);
+            this.showHint(`↩ 已回撤 ${k} 步` + (suffix ? ` · ${suffix}` : ''));
             this.trackSpecial('undo', { steps: k, freeLeft: this._undoFreeLeft, score: this.score });
         },
 

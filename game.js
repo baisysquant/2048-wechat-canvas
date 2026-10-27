@@ -68,6 +68,8 @@ const Game2048 = (function () {
             this._adInitialized = false;
             this._adLoadPromise = null;
             this._adPurpose = null;
+            this._adLoadTimer = null;
+            this._adWatchdog = null;
 
             // 特技加速状态
             this.specialPool = [];          // FIFO 队列 [{ id, value, ts }]
@@ -90,9 +92,24 @@ const Game2048 = (function () {
             // 难度弹框
             this._difficultyButtons = null;
             this._lastDifficulty = null;
+            this._difficultyDefs = [
+                { label: '4 × 4', sub: '经典模式', size: 4 },
+                { label: '5 × 5', sub: '挑战模式', size: 5 }
+            ];
 
-            // Path2D 缓存
-            this._pathCache = new Map();
+            // 事件绑定幂等标记（避免 onShow 重入产生幽灵 handler）
+            this._eventsBound = false;
+
+            // 结算弹窗配置缓存（避免每帧重建数组与闭包）
+            this._overlay = null;
+
+            // 最高分落盘去抖
+            this._bestDirty = false;
+            this._bestFlushTimer = null;
+
+            // 数字文本缓存（避免每帧 toString）
+            this._scoreLabelCache = { v: -1, s: '0' };
+            this._bestLabelCache = { v: -1, s: '0' };
 
             // 字体/样式缓存
             this._fontCache = new Map();
@@ -103,24 +120,24 @@ const Game2048 = (function () {
         }
 
         _initFontCache() {
-            // 预计算常用字体
-            const fontFamilies = ['Arial, "Microsoft YaHei", sans-serif'];
-            const fontWeights = ['normal', 'bold'];
-            const fontSizes = [11, 14, 18, 20, 24, 28, 32, 42, 48, 64, 72];
-
-            for (const family of fontFamilies) {
-                for (const weight of fontWeights) {
-                    for (const size of fontSizes) {
-                        const key = `${weight} ${size}px ${family}`;
-                        this._fontCache.set(key, key);
-                    }
+            // 数值键缓存：size*2 + (bold?1:0)，避免每帧拼接字体字符串
+            this._defaultFontFamily = 'Arial, "Microsoft YaHei", sans-serif';
+            for (let size = 10; size <= 80; size++) {
+                for (let bold = 0; bold <= 1; bold++) {
+                    const font = `${bold ? 'bold' : 'normal'} ${size}px ${this._defaultFontFamily}`;
+                    this._fontCache.set(size * 2 + bold, font);
                 }
             }
         }
 
-        getFont(weight, size, family = 'Arial, "Microsoft YaHei", sans-serif') {
-            const key = `${weight} ${size}px ${family}`;
-            return this._fontCache.get(key) || key;
+        getFont(weight, size, family) {
+            const bold = weight === 'bold';
+            if (!family || family === this._defaultFontFamily) {
+                const key = size * 2 + (bold ? 1 : 0);
+                return this._fontCache.get(key)
+                    || `${bold ? 'bold' : 'normal'} ${size}px ${this._defaultFontFamily}`;
+            }
+            return `${bold ? 'bold' : 'normal'} ${size}px ${family}`;
         }
 
         // State Machine
@@ -158,8 +175,24 @@ const Game2048 = (function () {
             return metrics;
         }
 
+        // 统一交互提示：红色飘字（替代系统黑色 toast）
+        // options: { x, y, duration, size } 均可省略
+        showHint(text, options) {
+            if (!text) return;
+            const o = options || {};
+            const msg = String(text);
+            const maxW = Math.max(120, this.width - 48);
+            const size = o.size || Math.max(14, Math.min(24, Math.floor(maxW / Math.max(1, msg.length))));
+            const x = o.x != null ? o.x : this.width / 2;
+            const y = o.y != null ? o.y : (this.boardY ? this.boardY - 16 : this.height / 2 - 80);
+            if (typeof this.pushFloatText === 'function') {
+                this.pushFloatText(msg, x, y, o.duration || 1500, size);
+            }
+        }
+
+        // 兼容旧调用名
         showToastSafe(title) {
-            try { wx.showToast({ title, icon: 'none' }); } catch (e) { }
+            this.showHint(title);
         }
 
         init() {
@@ -204,7 +237,7 @@ const Game2048 = (function () {
             if (!this._difficultyButtons) return;
             for (const btn of this._difficultyButtons) {
                 if (this.pointInRect(x, y, btn.rect)) {
-                    btn.callback();
+                    this.selectDifficulty(btn.size);
                     return;
                 }
             }
@@ -242,44 +275,43 @@ const Game2048 = (function () {
             ctx.fillStyle = '#9C8B7B';
             ctx.fillText('选择棋盘开始游戏', panelX + panelW / 2, panelY + 78);
 
-            // 难度按钮
+            // 难度按钮：布局变化时才重建（resize / 选择难度会清空缓存）
             const bw = panelW - 60;
             const bh = 64;
             const bx = panelX + (panelW - bw) / 2;
-            const y1 = panelY + 108;
-            const y2 = y1 + bh + 20;
-            const levels = [
-                { label: '4 × 4', sub: '经典模式', y: y1, size: 4 },
-                { label: '5 × 5', sub: '挑战模式', y: y2, size: 5 }
-            ];
-            this._difficultyButtons = [];
+            if (!this._difficultyButtons) {
+                const y1 = panelY + 108;
+                const y2 = y1 + bh + 20;
+                this._difficultyButtons = this._difficultyDefs.map((def, i) => ({
+                    label: def.label,
+                    sub: def.sub,
+                    size: def.size,
+                    rect: { x: bx, y: i === 0 ? y1 : y2, w: bw, h: bh }
+                }));
+            }
 
-            for (const lv of levels) {
-                const isLast = this._lastDifficulty === lv.size;
+            for (const btn of this._difficultyButtons) {
+                const r = btn.rect;
+                const isLast = this._lastDifficulty === btn.size;
                 ctx.fillStyle = isLast ? '#F2B179' : '#8F7A66';
-                this.roundRect(bx, lv.y, bw, bh, 12);
+                this.roundRect(r.x, r.y, r.w, r.h, 12);
 
                 ctx.fillStyle = COLORS.text.light;
                 ctx.font = this.getFont('bold', 22);
                 ctx.textAlign = 'left';
                 ctx.textBaseline = 'middle';
-                ctx.fillText(lv.label, bx + 40, lv.y + bh / 2 - 8);
+                ctx.fillText(btn.label, r.x + 40, r.y + r.h / 2 - 8);
 
                 ctx.font = this.getFont('normal', 13);
-                ctx.fillText(lv.sub, bx + 40, lv.y + bh / 2 + 16);
+                ctx.fillText(btn.sub, r.x + 40, r.y + r.h / 2 + 16);
 
                 if (isLast) {
                     // 上次选择的难度打标
                     ctx.font = this.getFont('bold', 12);
                     ctx.fillStyle = '#5C4A3A';
                     ctx.textAlign = 'right';
-                    ctx.fillText('上次使用', bx + bw - 16, lv.y + bh / 2);
+                    ctx.fillText('上次使用', r.x + r.w - 16, r.y + r.h / 2);
                 }
-
-                this._difficultyButtons.push({
-                    rect: { x: bx, y: lv.y, w: bw, h: bh, },
-                    callback: () => this.selectDifficulty(lv.size)
-                });
             }
 
             ctx.textAlign = 'left';
@@ -287,6 +319,7 @@ const Game2048 = (function () {
 
         bindLifecycle() {
             wx.onHide(() => {
+                this.flushBestScore();
                 this.unbindEvents();
                 // 未入池的闪烁机会在切后台时直接入池，避免数据丢失
                 if (this.specialPending) this.bankPendingSpecial(false);
@@ -388,9 +421,22 @@ const Game2048 = (function () {
             }
         }
 
-        saveBestScore() {
+        // 最高分落盘去抖：避免每个破纪录的 move 都触发同步 IO
+        markBestDirty() {
+            this._bestDirty = true;
+            if (this._bestFlushTimer) return;
+            this._bestFlushTimer = setTimeout(() => this.flushBestScore(), 2000);
+        }
+
+        flushBestScore() {
+            if (this._bestFlushTimer) {
+                clearTimeout(this._bestFlushTimer);
+                this._bestFlushTimer = null;
+            }
+            if (!this._bestDirty) return;
+            this._bestDirty = false;
             try {
-                wx.setStorageSync('fk2048_best', this.bestScore.toString());
+                wx.setStorageSync('fk2048_best', String(this.bestScore));
             } catch (e) { }
         }
 
@@ -402,7 +448,7 @@ const Game2048 = (function () {
             this.score = Number.isSafeInteger(next) ? next : Number.MAX_SAFE_INTEGER;
             if (this.score > this.bestScore) {
                 this.bestScore = this.score;
-                this.saveBestScore();
+                this.markBestDirty();
             }
         }
 
@@ -417,6 +463,10 @@ const Game2048 = (function () {
 
             this.ctx.scale(dpr, dpr);
             this.calculateLayout();
+
+            // 布局变化：失效难度弹框与结算弹窗的缓存矩形
+            this._difficultyButtons = null;
+            this._invalidateOverlayRects();
         }
 
         calculateLayout() {
@@ -460,11 +510,15 @@ const Game2048 = (function () {
             };
 
             // 棋盘上的闪烁按钮：正方形，控制在单个格子内
-            this.specialButtonSize = Math.max(48, Math.min(66, Math.floor(this.tileSize * 0.8)));
+            this.specialButtonSize = Math.max(36, Math.min(66, Math.floor(this.tileSize * 0.8)));
             if (this.specialPending) this.positionPending();
         }
 
         bindEvents() {
+            // 幂等：避免 onShow 等路径在未 onHide 时重复注册产生幽灵 handler
+            if (this._eventsBound) return;
+            this._eventsBound = true;
+
             this._touchStartHandler = (e) => {
                 const touch = e.touches[0];
                 this.touchStartX = touch.clientX;
@@ -503,7 +557,7 @@ const Game2048 = (function () {
 
                 // 难度选择弹框：点击按钮进入对应棋盘
                 if (this.isState(GameState.IDLE) && this._difficultyButtons) {
-                    this.checkDifficultyTap(x, y);
+                    if (!moved) this.checkDifficultyTap(x, y);   // 滑动不误触开局
                     return;
                 }
 
@@ -553,6 +607,8 @@ const Game2048 = (function () {
         }
 
         unbindEvents() {
+            if (!this._eventsBound) return;
+            this._eventsBound = false;
             wx.offTouchStart(this._touchStartHandler);
             wx.offTouchMove(this._touchMoveHandler);
             wx.offTouchEnd(this._touchEndHandler);
@@ -575,7 +631,7 @@ const Game2048 = (function () {
             this.score = 0;
             this.setState(GameState.PLAYING);
             this.wonShown = false;
-            this.overlayButtons = null;
+            this.clearOverlay();
             this.tileIdCounter = 0;
             this.addRandomTile();
             this.addRandomTile();
@@ -961,7 +1017,7 @@ const Game2048 = (function () {
             let lastTime = Date.now();
             const frame = () => {
                 const now = Date.now();
-                const dt = (now - lastTime) / 1000;
+                const dt = Math.min(0.05, (now - lastTime) / 1000);
                 lastTime = now;
 
                 this.updateAnimations(dt);
@@ -981,6 +1037,7 @@ const Game2048 = (function () {
                 if (this.isState(GameState.IDLE)) {
                     this.drawBackground();
                     this.drawDifficultyDialog();
+                    this.drawSpecialFloatTexts(Date.now());
                     return;
                 }
 
@@ -993,15 +1050,19 @@ const Game2048 = (function () {
                 this.drawSpecialFlyers(now);
                 this.drawUI();
                 this.drawSpecialPanel();
-                this.drawSpecialFloatTexts(now);
 
                 if (this.isState(GameState.WON) && !this.wonShown) {
                     this.showWinDialog();
                 }
 
-                if (this.isState(GameState.GAME_OVER)) {
+                if (this.isState(GameState.GAME_OVER) && !this._overlay) {
                     this.showGameOverDialog();
                 }
+
+                if (this._overlay) this.drawOverlay();
+
+                // 提示飘字最后绘制：保证在弹窗/遮罩之上仍然可见
+                this.drawSpecialFloatTexts(now);
             } catch (err) {
                 console.error('Render error:', err);
                 // 尝试恢复
@@ -1016,6 +1077,11 @@ const Game2048 = (function () {
 
         destroy() {
             this.unbindEvents();
+            this.flushBestScore();
+            clearTimeout(this._adLoadTimer);
+            clearTimeout(this._adWatchdog);
+            this._adLoadTimer = null;
+            this._adWatchdog = null;
             if (this.rewardedAd) {
                 this.rewardedAd.offLoad();
                 this.rewardedAd.offError();
@@ -1068,7 +1134,7 @@ const Game2048 = (function () {
                 this.ctx.font = this.getFont('bold', fontSize);
                 this.ctx.textAlign = 'center';
                 this.ctx.textBaseline = 'middle';
-                this.ctx.fillText(tile.value.toString(), px + this.tileSize / 2, py + this.tileSize / 2);
+                this.ctx.fillText(tile.label, px + this.tileSize / 2, py + this.tileSize / 2);
                 this.ctx.globalAlpha = 1;
             }
         }
@@ -1086,8 +1152,8 @@ const Game2048 = (function () {
             const gap = Math.max(8, Math.min(24, this.boardSize - boxW * 2));
             const rightX = boardRight - boxW;
 
-            this.drawScoreBox(rightX, this.scoreBoxY, '得分', this.score, boxW);
-            this.drawScoreBox(rightX - boxW - gap, this.scoreBoxY, '最佳', this.bestScore, boxW);
+            this.drawScoreBox(rightX, this.scoreBoxY, '得分', this.numLabel(this.score, this._scoreLabelCache), boxW);
+            this.drawScoreBox(rightX - boxW - gap, this.scoreBoxY, '最佳', this.numLabel(this.bestScore, this._bestLabelCache), boxW);
             this.drawSpecialPoolBar();
             this.drawUndoButton();  // 与特技池同一行、位于其左侧
 
@@ -1120,80 +1186,120 @@ const Game2048 = (function () {
             this.ctx.fillText(value.toString(), x + boxW / 2, y + SCORE_VALUE_Y);
         }
 
-        getRoundRectPath(w, h, r) {
-            const key = `${w},${h},${r}`;
-            let path = this._pathCache.get(key);
-            if (!path) {
-                path = new Path2D();
-                path.moveTo(r, 0);
-                path.lineTo(w - r, 0);
-                path.quadraticCurveTo(w, 0, w, r);
-                path.lineTo(w, h - r);
-                path.quadraticCurveTo(w, h, w - r, h);
-                path.lineTo(r, h);
-                path.quadraticCurveTo(0, h, 0, h - r);
-                path.lineTo(0, r);
-                path.quadraticCurveTo(0, 0, r, 0);
-                path.closePath();
-                this._pathCache.set(key, path);
+        // 数字文本缓存：值未变化时复用字符串，减少每帧分配
+        numLabel(value, cache) {
+            if (cache.v !== value) {
+                cache.v = value;
+                cache.s = String(value);
             }
-            return path;
+            return cache.s;
         }
 
-        drawRoundRect(x, y, w, h, r) {
-            const path = this.getRoundRectPath(w, h, r);
-            this.ctx.save();
-            this.ctx.translate(x, y);
-            this.ctx.fill(path);
-            this.ctx.restore();
-        }
-
+        // 圆角矩形：统一用 arcTo 手绘路径。
+        // 微信小游戏真机（尤其 iOS）没有全局 Path2D，Canvas 2D 的 fill(path)
+        // 也不保证可用，因此这里不依赖任何扩展 API，只使用 Canvas 1.0 能力。
         roundRect(x, y, w, h, r) {
-            this.drawRoundRect(x, y, w, h, r);
+            const ctx = this.ctx;
+            const rr = Math.min(Math.max(0, r), w / 2, h / 2);
+            ctx.beginPath();
+            ctx.moveTo(x + rr, y);
+            ctx.arcTo(x + w, y, x + w, y + h, rr);
+            ctx.arcTo(x + w, y + h, x, y + h, rr);
+            ctx.arcTo(x, y + h, x, y, rr);
+            ctx.arcTo(x, y, x + w, y, rr);
+            ctx.closePath();
+            ctx.fill();
         }
 
         showWinDialog() {
+            if (this._overlay) return;
             this.wonShown = true;
-            this.drawOverlay('恭喜获胜!', '达成 2048!', [
+            this._buildOverlay('恭喜获胜!', '达成 2048!', [
                 { text: '继续游戏', color: '#8F7A66', callback: () => { this.wonShown = true; this.setState(GameState.PLAYING); } },
                 { text: '重新开始', color: '#8F7A66', callback: () => { this.newGame(); this.wonShown = false; } }
             ]);
         }
 
         showGameOverDialog() {
-            this.drawOverlay('游戏结束', `最终得分: ${this.score}`, [
+            if (this._overlay) return;
+            this.flushBestScore();
+            this._buildOverlay('游戏结束', '最终得分: ' + this.score, [
                 { text: '重新开始', color: '#F2B179', callback: () => { this.newGame(); } },
-                { text: '看广告复活', color: '#8F7A66', callback: () => { this.showRewardedAd(); } }
+                { text: '看广告复活', color: '#8F7A66', callback: () => { this.showRewardedAd('revive'); } }
             ]);
         }
 
-        drawOverlay(title, subtitle, buttons) {
+        // 结算弹窗配置只构建一次，渲染时复用，避免每帧创建数组/闭包
+        _buildOverlay(title, subtitle, buttons) {
+            this._overlay = { title, subtitle, buttons };
+            this.overlayButtons = buttons;
+            this._invalidateOverlayRects();
+        }
+
+        clearOverlay() {
+            this._overlay = null;
+            this.overlayButtons = null;
+        }
+
+        _invalidateOverlayRects() {
+            if (!this._overlay) return;
+            for (const btn of this._overlay.buttons) btn._rect = null;
+        }
+
+        drawOverlay() {
+            const overlay = this._overlay;
+            if (!overlay) return;
+
             this.ctx.fillStyle = 'rgba(238, 228, 218, 0.95)';
             this.ctx.fillRect(0, 0, this.width, this.height);
 
             this.ctx.fillStyle = COLORS.text.dark;
             this.ctx.font = this.getFont('bold', 48);
             this.ctx.textAlign = 'center';
-            this.ctx.fillText(title, this.width / 2, this.height / 2 - 80);
+            this.ctx.fillText(overlay.title, this.width / 2, this.height / 2 - 80);
 
             this.ctx.font = this.getFont('normal', 28);
-            this.ctx.fillText(subtitle, this.width / 2, this.height / 2 - 20);
+            this.ctx.fillText(overlay.subtitle, this.width / 2, this.height / 2 - 20);
 
+            const count = overlay.buttons.length;
+            const margin = Math.max(20, Math.round(this.width * 0.06));   // 与屏幕左右边界的安全距离
+            const gap = 14;                                              // 两个按钮之间的间距
+            const btnH = 60;
+            const maxBtnW = 220;
+            // 按屏幕宽度均分可用区域，保证按钮不重叠、不越界
+            const btnW = Math.min(
+                maxBtnW,
+                Math.floor((this.width - margin * 2 - gap * (count - 1)) / count)
+            );
+            const totalW = btnW * count + gap * (count - 1);
+            const startX = (this.width - totalW) / 2;
             const btnY = this.height / 2 + 60;
-            buttons.forEach((btn, i) => {
-                const btnX = this.width / 2 + (i - (buttons.length - 1) / 2) * 160;
+
+            this.ctx.textBaseline = 'middle';
+            for (let i = 0; i < count; i++) {
+                const btn = overlay.buttons[i];
+                if (!btn._rect) {
+                    btn._rect = {
+                        x: startX + i * (btnW + gap),
+                        y: btnY - btnH / 2,
+                        w: btnW,
+                        h: btnH
+                    };
+                }
+                const r = btn._rect;
                 this.ctx.fillStyle = btn.color;
-                this.roundRect(btnX - 100, btnY - 30, 200, 60, 8);
-                this.ctx.fill();
+                this.roundRect(r.x, r.y, r.w, r.h, 8);
 
+                // 窄屏自动缩小字号，避免文字顶到按钮边缘
+                const fontSize = Math.max(
+                    16,
+                    Math.min(24, Math.floor((r.w - 24) / Math.max(1, btn.text.length)))
+                );
                 this.ctx.fillStyle = COLORS.text.light;
-                this.ctx.font = this.getFont('bold', 24);
-                this.ctx.fillText(btn.text, btnX, btnY + 8);
-
-                btn._rect = { x: btnX - 100, y: btnY - 30, w: 200, h: 60, callback: btn.callback };
-            });
-
-            this.overlayButtons = buttons;
+                this.ctx.font = this.getFont('bold', fontSize);
+                this.ctx.textAlign = 'center';
+                this.ctx.fillText(btn.text, r.x + r.w / 2, r.y + r.h / 2 + 1);
+            }
         }
 
         checkOverlayTap(x, y) {
@@ -1202,7 +1308,7 @@ const Game2048 = (function () {
                 if (btn._rect && x >= btn._rect.x && x <= btn._rect.x + btn._rect.w &&
                     y >= btn._rect.y && y <= btn._rect.y + btn._rect.h) {
                     btn.callback();
-                    this.overlayButtons = null;
+                    this.clearOverlay();
                     return true;
                 }
             }
@@ -1220,4 +1326,4 @@ Object.assign(Game2048.prototype, FK.special, FK.ads, FK.undo);
 const canvas = wx.createCanvas();
 const game = new Game2048(canvas);
 
-console.log('FK2048 Native Started');
+console.log('start');

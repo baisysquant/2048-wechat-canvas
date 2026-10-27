@@ -14,7 +14,7 @@
         DEBUG_SKIP_AD,
         SPECIAL_TRIGGER_VALUE, SPECIAL_CAP, SPECIAL_MAX_PER_GAME, SPECIAL_REWARD,
         SPECIAL_FLOAT_MS, SPECIAL_FADE_MS, SPECIAL_BANK_FLY_MS,
-        SPECIAL_AD_LOAD_TIMEOUT, SPECIAL_AD_COOLDOWN, SPECIAL_SAVE_KEY,
+        SPECIAL_AD_LOAD_TIMEOUT, SPECIAL_AD_COOLDOWN, SPECIAL_SAVE_KEY, AD_PLAY_WATCHDOG_MS,
         COLORS
     } = C;
 
@@ -115,9 +115,17 @@
             // 只在空格子里出现，绝不覆盖已有数字
             const cells = this.getEmptyCells();
             if (cells.length === 0) {
-                // 满盘时没有安全位置，直接入池，机会不丢失
-                this.pushSpecialPoolItem(this.boardX + this.boardSize / 2, this.boardY + this.boardSize / 2, false);
-                this.trackSpecial('trigger', { index: this._specialTriggered, placed: 'pool_no_space' });
+                // 满盘时没有安全位置，直接入池；池也满时按奖励兑现，机会不丢失
+                const saved = this.pushSpecialPoolItem(
+                    this.boardX + this.boardSize / 2,
+                    this.boardY + this.boardSize / 2,
+                    false
+                );
+                if (saved) {
+                    this.trackSpecial('trigger', { index: this._specialTriggered, placed: 'pool_no_space' });
+                } else {
+                    this.grantOverflowSpecialReward();
+                }
                 return;
             }
 
@@ -153,7 +161,15 @@
             const p = this.specialPending;
             if (!p) return;
             this.specialPending = null;
-            this.pushSpecialPoolItem(p.x, p.y, fromClick);
+            const saved = this.pushSpecialPoolItem(p.x, p.y, fromClick);
+            // 池满兜底：机会不丢弃，直接按特技奖励兑现分数
+            if (!saved) this.grantOverflowSpecialReward();
+        }
+
+        , grantOverflowSpecialReward() {
+            this.addScore(SPECIAL_REWARD);
+            this.pushFloatText('⚡ 特技池已满，已自动兑现 +2048', this.width / 2, this.height / 2, 1600, 24);
+            this.trackSpecial('bank_overflow_direct_reward', { score: this.score });
         }
 
         , updateSpecial(now) {
@@ -195,14 +211,15 @@
             }
         }
 
-        , pushFloatText(text, x, y, duration, size) {
+        , pushFloatText(text, x, y, duration, size, rise) {
             this._specialFloatTexts.push({
                 text,
                 x,
                 y,
                 startAt: Date.now(),
                 duration: duration || 1400,
-                size: size || 26
+                size: size || 26,
+                rise: rise == null ? 64 : rise
             });
         }
 
@@ -357,7 +374,7 @@
 
             if (DEBUG_SKIP_AD) {
                 this.trackSpecial('debug_skip_ad', { scene: 'special' });
-                try { wx.showToast({ title: '调测模式：跳过广告', icon: 'none' }); } catch (e) { }
+                this.showHint('调测模式：跳过广告');
                 this.grantSpecialReward(item.id);
                 return;
             }
@@ -366,7 +383,6 @@
             if (!this._specialFreeUsed) {
                 this._specialFreeUsed = true;
                 this.trackSpecial('free_use', { itemId: item.id });
-                try { wx.showToast({ title: '本局首次特技免费', icon: 'none' }); } catch (e) { }
                 this.grantSpecialReward(item.id, true);
                 return;
             }
@@ -374,7 +390,7 @@
             if (now < this._specialCooldownUntil) return;
 
             if (!wx.createRewardedVideoAd) {
-                wx.showToast({ title: '当前版本暂不支持广告', icon: 'none' });
+                this.showHint('当前版本暂不支持广告');
                 this._specialCooldownUntil = now + SPECIAL_AD_COOLDOWN;
                 return;
             }
@@ -419,7 +435,7 @@
                         if (this._adPurpose === 'special') {
                             this.failSpecialAd('广告未完成，请稍后重试');
                         }
-                    }, 90000);
+                    }, AD_PLAY_WATCHDOG_MS);
                     return;
                 }
 
@@ -428,7 +444,7 @@
                     if (this._adPurpose === 'special') {
                         this.failSpecialAd('广告未完成，请稍后重试');
                     }
-                }, 90000);
+                }, AD_PLAY_WATCHDOG_MS);
 
                 showPromise.then(() => {
                     try { wx.hideLoading(); } catch (e) { }
@@ -455,7 +471,7 @@
 
             this.trackSpecial('ad_fail', { msg: msg || '' });
             if (msg) {
-                try { wx.showToast({ title: msg, icon: 'none' }); } catch (e) { }
+                this.showHint(msg);
             }
         }
 
@@ -473,7 +489,7 @@
             if (!watched) {
                 this.trackSpecial('ad_incomplete');
                 // 中途关闭：条目保留、库存不变，可再次点击
-                try { wx.showToast({ title: '完整观看广告才能领取奖励', icon: 'none' }); } catch (e) { }
+                this.showHint('完整观看广告才能领取奖励');
                 return;
             }
             this.trackSpecial('ad_complete');
@@ -708,10 +724,18 @@
                 ctx.font = this.getFont('bold', f.size);
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
-                ctx.lineWidth = 4;
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
-                ctx.fillStyle = '#E8833A';
-                const y = f.y - t * 64;
+                const y = f.y - t * (f.rise == null ? 64 : f.rise);
+
+                // 红色发光层
+                ctx.shadowColor = 'rgba(232, 56, 32, 0.65)';
+                ctx.shadowBlur = 14;
+                ctx.fillStyle = '#E8452A';
+                ctx.fillText(f.text, f.x, y);
+
+                // 白色描边 + 红色填充，浅色棋盘上也清晰
+                ctx.shadowBlur = 0;
+                ctx.lineWidth = Math.max(3, f.size * 0.16);
+                ctx.strokeStyle = 'rgba(255, 250, 245, 0.95)';
                 ctx.strokeText(f.text, f.x, y);
                 ctx.fillText(f.text, f.x, y);
                 ctx.restore();

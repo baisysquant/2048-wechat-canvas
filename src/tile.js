@@ -18,6 +18,17 @@
             this.new = true;
             this.scale = 0;
             this.opacity = 1;
+            this._labelValue = undefined;
+            this._label = '';
+        }
+
+        // 数字文本缓存：每帧绘制时避免重复 toString 产生垃圾
+        get label() {
+            if (this._labelValue !== this.value) {
+                this._labelValue = this.value;
+                this._label = String(this.value);
+            }
+            return this._label;
         }
     }
 
