@@ -159,7 +159,10 @@ const Game2048 = (function () {
             }
         }
 
-        isState(...states) {
+        isState() {
+            // 不用 rest 参数（...states）：微信「增强编译」的 SWC 会为它生成
+            // @swc/runtime helper，在小游戏环境不存在，导致 module is not defined
+            const states = [].slice.call(arguments);
             return states.includes(this._state);
         }
 
@@ -433,7 +436,9 @@ const Game2048 = (function () {
             }
 
             // 为缺失的 grid 位置创建新 tiles
-            for (const [, pos] of needed) {
+            // 不用 for...of + 数组解构（[, pos]）：SWC「增强编译」会生成外部 helper 依赖
+            for (const entry of needed) {
+                const pos = entry[1];
                 const newTile = new FK.Tile(pos.value, pos.x, pos.y);
                 newTile.id = `tile_${this.tileIdCounter++}`;
                 newTile.scale = 1;
@@ -805,7 +810,7 @@ const Game2048 = (function () {
 
         getRowWithTiles(y) {
             const row = [];
-            const availableTiles = [...this.tiles]; // Copy to track used tiles
+            const availableTiles = this.tiles.slice(); // Copy to track used tiles（不用展开符，避免 SWC helper 依赖）
             for (let x = 0; x < this.gridSize; x++) {
                 if (this.grid[y][x] !== null) {
                     // 精确位置 + 数值匹配
@@ -839,7 +844,7 @@ const Game2048 = (function () {
 
         getColWithTiles(x) {
             const col = [];
-            const availableTiles = [...this.tiles];
+            const availableTiles = this.tiles.slice();
             for (let y = 0; y < this.gridSize; y++) {
                 if (this.grid[y][x] !== null) {
                     // 精确位置 + 数值匹配
