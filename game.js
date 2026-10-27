@@ -93,8 +93,8 @@ const Game2048 = (function () {
             this._difficultyButtons = null;
             this._lastDifficulty = null;
             this._difficultyDefs = [
-                { label: '4 × 4', sub: '经典模式', size: 4 },
-                { label: '5 × 5', sub: '挑战模式', size: 5 }
+                { label: '经典 4X4', size: 4 },
+                { label: '挑战 5X5', size: 5 }
             ];
 
             // 事件绑定幂等标记（避免 onShow 重入产生幽灵 handler）
@@ -102,6 +102,10 @@ const Game2048 = (function () {
 
             // 结算弹窗配置缓存（避免每帧重建数组与闭包）
             this._overlay = null;
+
+            // 对话框/弹窗文字入场动画：打开时从下方上浮 + 淡入
+            this._dialogAnimStart = 0;
+            this._dialogAnimDuration = 420;
 
             // 最高分落盘去抖
             this._bestDirty = false;
@@ -195,6 +199,21 @@ const Game2048 = (function () {
             this.showHint(title);
         }
 
+        // 弹窗文字入场动画：打开时从下方上浮 + 淡入
+        beginDialogTextAnim() {
+            this._dialogAnimStart = Date.now();
+        }
+
+        // 返回 { t, alpha }：t 为 easeOutCubic 缓动进度(0..1)，alpha 为淡入透明度(0..1)
+        dialogTextAnim(now) {
+            if (!this._dialogAnimStart) return { t: 1, alpha: 1 };
+            const raw = Math.min(1, (now - this._dialogAnimStart) / this._dialogAnimDuration);
+            return {
+                t: 1 - Math.pow(1 - raw, 3),
+                alpha: Math.min(1, raw / 0.22)
+            };
+        }
+
         init() {
             if (DEBUG_SKIP_AD) {
                 console.warn('[调测模式] 已跳过激励视频：复活/特技/回撤奖励直接发放。上线前请将 src/config.js 的 DEBUG_SKIP_AD 改为 false。');
@@ -246,6 +265,9 @@ const Game2048 = (function () {
         drawDifficultyDialog() {
             const ctx = this.ctx;
 
+            // 弹窗重新创建时，文字重新播放入场动画（从下方上浮）
+            if (!this._difficultyButtons) this.beginDialogTextAnim();
+
             // 半透明遮罩
             ctx.save();
             ctx.fillStyle = 'rgba(35, 28, 24, 0.55)';
@@ -264,16 +286,21 @@ const Game2048 = (function () {
             this.roundRect(panelX, panelY, panelW, panelH, 18);
             ctx.restore();
 
-            // 标题
+            // 标题 + 副标题：弹出时从下方上浮并淡入
+            const anim = this.dialogTextAnim(Date.now());
+            const rise = 44;
+            ctx.save();
+            ctx.globalAlpha = anim.alpha;
             ctx.fillStyle = COLORS.text.dark;
             ctx.font = this.getFont('bold', 26);
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
-            ctx.fillText('选择难度', panelX + panelW / 2, panelY + 48);
+            ctx.fillText('选择难度', panelX + panelW / 2, panelY + 48 + (1 - anim.t) * rise);
 
             ctx.font = this.getFont('normal', 14);
             ctx.fillStyle = '#9C8B7B';
-            ctx.fillText('选择棋盘开始游戏', panelX + panelW / 2, panelY + 78);
+            ctx.fillText('选择棋盘开始游戏', panelX + panelW / 2, panelY + 78 + (1 - anim.t) * rise);
+            ctx.restore();
 
             // 难度按钮：布局变化时才重建（resize / 选择难度会清空缓存）
             const bw = panelW - 60;
@@ -284,7 +311,6 @@ const Game2048 = (function () {
                 const y2 = y1 + bh + 20;
                 this._difficultyButtons = this._difficultyDefs.map((def, i) => ({
                     label: def.label,
-                    sub: def.sub,
                     size: def.size,
                     rect: { x: bx, y: i === 0 ? y1 : y2, w: bw, h: bh }
                 }));
@@ -296,21 +322,18 @@ const Game2048 = (function () {
                 ctx.fillStyle = isLast ? '#F2B179' : '#8F7A66';
                 this.roundRect(r.x, r.y, r.w, r.h, 12);
 
+                // 主文字（经典 4X4 / 挑战 5X5）：一行，水平居中
                 ctx.fillStyle = COLORS.text.light;
                 ctx.font = this.getFont('bold', 22);
-                ctx.textAlign = 'left';
+                ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
-                ctx.fillText(btn.label, r.x + 40, r.y + r.h / 2 - 8);
-
-                ctx.font = this.getFont('normal', 13);
-                ctx.fillText(btn.sub, r.x + 40, r.y + r.h / 2 + 16);
+                ctx.fillText(btn.label, r.x + r.w / 2, r.y + r.h / 2 - 8);
 
                 if (isLast) {
-                    // 上次选择的难度打标
+                    // 上次选择的难度打标：第二行，同样水平居中
                     ctx.font = this.getFont('bold', 12);
                     ctx.fillStyle = '#5C4A3A';
-                    ctx.textAlign = 'right';
-                    ctx.fillText('上次使用', r.x + r.w - 16, r.y + r.h / 2);
+                    ctx.fillText('上次使用', r.x + r.w / 2, r.y + r.h / 2 + 16);
                 }
             }
 
@@ -324,6 +347,14 @@ const Game2048 = (function () {
                 // 未入池的闪烁机会在切后台时直接入池，避免数据丢失
                 if (this.specialPending) this.bankPendingSpecial(false);
                 this.closeSpecialPanel();
+                // 广告播放中被切后台：立即释放锁并清理 loading，避免返回后 UI 悬挂。
+                // 特技场景走专用出口（清 _specialAdBusy/_specialPendingItemId 并加冷却），
+                // 其余场景走通用出口
+                if (this._adPurpose === 'special') {
+                    this.failSpecialAd('');
+                } else if (this._adPurpose) {
+                    this.failGeneralAd(this._adPurpose, '');
+                }
             });
             wx.onShow(() => {
                 // 确保动画状态重置，避免卡死
@@ -336,8 +367,15 @@ const Game2048 = (function () {
                 if (Array.isArray(this.grid) && this.grid.length === this.gridSize) {
                     this.syncTilesWithGrid();
                 }
-                // 部分机型切后台会清理 SDK 回调，这里确保广告回调仍可用
-                if (!this.rewardedAd && !this._adPurpose) this.initRewardedAd();
+                // 部分机型切后台会清理 SDK 回调 / 广告实例失效，这里确保广告可用：
+                // 实例不存在则重建；实例存在但加载失败则主动重载
+                if (!this._adPurpose && !this._specialAdBusy) {
+                    if (!this.rewardedAd) {
+                        this.initRewardedAd();
+                    } else if (!this.adLoaded && !this.adLoading) {
+                        this.loadRewardedAd();
+                    }
+                }
             });
         }
 
@@ -412,10 +450,34 @@ const Game2048 = (function () {
             setTimeout(() => this.loadRewardedAd(), 2000);
         }
 
+        // 最高分校验摘要：FNV-1a 快速哈希，防止玩家直接修改本地存储刷分
+        static bestDigest(value) {
+            let h = 0x811c9dc5;
+            const s = 'fk2048:v1:' + value;
+            for (let i = 0; i < s.length; i++) {
+                h ^= s.charCodeAt(i);
+                h = (h * 0x01000193) >>> 0;
+            }
+            return h.toString(36);
+        }
+
         loadBestScore() {
             try {
                 const stored = wx.getStorageSync('fk2048_best');
-                this.bestScore = stored ? parseInt(stored, 10) : 0;
+                if (typeof stored === 'string') {
+                    // 兼容旧版本纯字符串存储，并立即迁移为带校验格式
+                    this.bestScore = stored ? parseInt(stored, 10) : 0;
+                    try {
+                        wx.setStorageSync('fk2048_best', {
+                            v: String(this.bestScore),
+                            c: Game.bestDigest(this.bestScore)
+                        });
+                    } catch (e) { }
+                } else if (stored && stored.v != null && stored.c === Game.bestDigest(stored.v)) {
+                    this.bestScore = parseInt(stored.v, 10) || 0;
+                } else {
+                    this.bestScore = 0;   // 校验失败视为被篡改 / 首次运行
+                }
             } catch (e) {
                 this.bestScore = 0;
             }
@@ -436,7 +498,10 @@ const Game2048 = (function () {
             if (!this._bestDirty) return;
             this._bestDirty = false;
             try {
-                wx.setStorageSync('fk2048_best', String(this.bestScore));
+                wx.setStorageSync('fk2048_best', {
+                    v: String(this.bestScore),
+                    c: Game.bestDigest(this.bestScore)
+                });
             } catch (e) { }
         }
 
@@ -456,6 +521,8 @@ const Game2048 = (function () {
             const sysInfo = wx.getWindowInfo ? wx.getWindowInfo() : wx.getSystemInfoSync();
             const dpr = sysInfo.pixelRatio || 1;
 
+            // 显式复位变换，不依赖“重设 canvas 尺寸会重置上下文”的平台差异行为
+            this.ctx.setTransform(1, 0, 0, 1, 0, 0);
             this.canvas.width = sysInfo.windowWidth * dpr;
             this.canvas.height = sysInfo.windowHeight * dpr;
             this.width = sysInfo.windowWidth;
@@ -657,6 +724,8 @@ const Game2048 = (function () {
 
         move(direction) {
             if (!this.isState(GameState.PLAYING)) return;
+            // 广告加载/播放中禁止棋盘操作，避免奖励结算基于被修改的棋盘状态
+            if (this._adPurpose || this._specialAdBusy) return;
 
             // 回撤快照：仅在本步真正移动后入历史
             const snapshot = this.takeUndoSnapshot();
@@ -739,16 +808,27 @@ const Game2048 = (function () {
             const availableTiles = [...this.tiles]; // Copy to track used tiles
             for (let x = 0; x < this.gridSize; x++) {
                 if (this.grid[y][x] !== null) {
-                    // Try exact position match first
+                    // 精确位置 + 数值匹配
                     let tileIdx = availableTiles.findIndex(t => Math.round(t.x) === x && Math.round(t.y) === y && t.value === this.grid[y][x]);
-                    // Fallback: same value, same row, not used yet
+                    // 目标位置匹配：方块 target 已就位时也能对上
+                    if (tileIdx === -1) {
+                        tileIdx = availableTiles.findIndex(t => Math.round(t.targetX) === x && Math.round(t.targetY) === y && t.value === this.grid[y][x]);
+                    }
+                    // 同值同行匹配
                     if (tileIdx === -1) {
                         tileIdx = availableTiles.findIndex(t => t.value === this.grid[y][x] && Math.round(t.y) === y);
                     }
                     if (tileIdx !== -1) {
                         row.push(availableTiles.splice(tileIdx, 1)[0]);
                     } else {
-                        row.push({ value: this.grid[y][x], id: `tile_${this.tileIdCounter++}`, x, y });
+                        // 兜底：创建真实 Tile 并注册，保证合并/绘制/回收走同一引用，
+                        // 避免占位对象与真实方块失去关联导致数值不同步
+                        const tile = new FK.Tile(this.grid[y][x], x, y);
+                        tile.id = `tile_${this.tileIdCounter++}`;
+                        tile.new = false;
+                        tile.scale = 1;
+                        this.tiles.push(tile);
+                        row.push(tile);
                     }
                 } else {
                     row.push(null);
@@ -762,14 +842,26 @@ const Game2048 = (function () {
             const availableTiles = [...this.tiles];
             for (let y = 0; y < this.gridSize; y++) {
                 if (this.grid[y][x] !== null) {
+                    // 精确位置 + 数值匹配
                     let tileIdx = availableTiles.findIndex(t => Math.round(t.x) === x && Math.round(t.y) === y && t.value === this.grid[y][x]);
+                    // 目标位置匹配：方块 target 已就位时也能对上
+                    if (tileIdx === -1) {
+                        tileIdx = availableTiles.findIndex(t => Math.round(t.targetX) === x && Math.round(t.targetY) === y && t.value === this.grid[y][x]);
+                    }
+                    // 同值同列匹配
                     if (tileIdx === -1) {
                         tileIdx = availableTiles.findIndex(t => t.value === this.grid[y][x] && Math.round(t.x) === x);
                     }
                     if (tileIdx !== -1) {
                         col.push(availableTiles.splice(tileIdx, 1)[0]);
                     } else {
-                        col.push({ value: this.grid[y][x], id: `tile_${this.tileIdCounter++}`, x, y });
+                        // 兜底：创建真实 Tile 并注册，保证合并/绘制/回收走同一引用
+                        const tile = new FK.Tile(this.grid[y][x], x, y);
+                        tile.id = `tile_${this.tileIdCounter++}`;
+                        tile.new = false;
+                        tile.scale = 1;
+                        this.tiles.push(tile);
+                        col.push(tile);
                     }
                 } else {
                     col.push(null);
@@ -944,8 +1036,10 @@ const Game2048 = (function () {
                 }
             }
 
-            // Filter out removed tiles
-            this.tiles = this.tiles.filter(t => t.opacity > 0.01);
+            // Filter out removed tiles：仅在确实有方块被移除时才重建数组，避免每帧产生垃圾
+            if (this.tiles.some(t => t.opacity <= 0.01)) {
+                this.tiles = this.tiles.filter(t => t.opacity > 0.01);
+            }
 
             // Handle merge pop animation
             for (const tile of this.tiles) {
@@ -981,7 +1075,9 @@ const Game2048 = (function () {
 
         checkGameState() {
             const n = this.gridSize;
-            if (!this.isState(GameState.WON)) {
+            // 已弹过胜利框并点击“继续游戏”后（wonShown=true），不再重复进入 WON，
+            // 否则棋盘上的 2048 会让状态永久锁死在 WON，导致无法继续移动
+            if (!this.isState(GameState.WON) && !this.wonShown) {
                 for (let y = 0; y < n; y++) {
                     for (let x = 0; x < n; x++) {
                         if (this.grid[y][x] >= 2048) {
@@ -1015,15 +1111,35 @@ const Game2048 = (function () {
 
         loop() {
             let lastTime = Date.now();
+            let frameErrors = 0;
             const frame = () => {
                 const now = Date.now();
                 const dt = Math.min(0.05, (now - lastTime) / 1000);
                 lastTime = now;
 
-                this.updateAnimations(dt);
-                this.updateSpecial(now);
-                this.render();
+                try {
+                    this.updateAnimations(dt);
+                    this.updateSpecial(now);
+                    this.render();
+                    frameErrors = 0;
+                } catch (err) {
+                    console.error('Frame error:', err);
+                    // 连续出错超过阈值：降级为只保留基础玩法——
+                    // 清理动画缓冲、关闭特技弹窗，避免持续分配新对象
+                    if (++frameErrors > 120) {
+                        this._specialFloatTexts = [];
+                        this._specialFlyers = [];
+                        this.closeSpecialPanel();
+                        // 仅当棋盘已建立且当前卡在过渡态时才尝试恢复可操作状态；
+                        // IDLE（难度弹框阶段棋盘未建）绝不能强切，否则会渲染空棋盘
+                        if (Array.isArray(this.grid) && this.grid.length === this.gridSize &&
+                            !this.isState(GameState.PLAYING) && !this.isState(GameState.GAME_OVER)) {
+                            this.setState(GameState.PLAYING);
+                        }
+                    }
+                }
 
+                // 无论如何都继续下一帧：单帧失败不终止渲染循环，避免游戏永久冻结
                 requestAnimationFrame(frame);
             };
             requestAnimationFrame(frame);
@@ -1234,6 +1350,7 @@ const Game2048 = (function () {
             this._overlay = { title, subtitle, buttons };
             this.overlayButtons = buttons;
             this._invalidateOverlayRects();
+            this.beginDialogTextAnim();   // 弹窗打开时文字从下方上浮
         }
 
         clearOverlay() {
@@ -1253,13 +1370,19 @@ const Game2048 = (function () {
             this.ctx.fillStyle = 'rgba(238, 228, 218, 0.95)';
             this.ctx.fillRect(0, 0, this.width, this.height);
 
+            // 标题 + 副标题：弹出时从下方上浮并淡入
+            const anim = this.dialogTextAnim(Date.now());
+            const rise = 48;
+            this.ctx.save();
+            this.ctx.globalAlpha = anim.alpha;
             this.ctx.fillStyle = COLORS.text.dark;
             this.ctx.font = this.getFont('bold', 48);
             this.ctx.textAlign = 'center';
-            this.ctx.fillText(overlay.title, this.width / 2, this.height / 2 - 80);
+            this.ctx.fillText(overlay.title, this.width / 2, this.height / 2 - 80 + (1 - anim.t) * rise);
 
             this.ctx.font = this.getFont('normal', 28);
-            this.ctx.fillText(overlay.subtitle, this.width / 2, this.height / 2 - 20);
+            this.ctx.fillText(overlay.subtitle, this.width / 2, this.height / 2 - 20 + (1 - anim.t) * rise);
+            this.ctx.restore();
 
             const count = overlay.buttons.length;
             const margin = Math.max(20, Math.round(this.width * 0.06));   // 与屏幕左右边界的安全距离

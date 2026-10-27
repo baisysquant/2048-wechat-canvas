@@ -53,7 +53,25 @@
             }
 
             this._adConfigInvalid = false;
-            this.rewardedAd = wx.createRewardedVideoAd({ adUnitId });
+
+            let ad = null;
+            try {
+                ad = wx.createRewardedVideoAd({ adUnitId });
+            } catch (e) {
+                // 创建异常（权限/额度/平台错误）不得中断调用链；一次失败即永久禁用该实例，
+                // 避免后续每次点击入口都重复触发 create 报错
+                this._rewardedAdInited = true;
+                this._adConfigInvalid = true;
+                console.error('[Ads] 创建激励视频广告失败：', (e && e.errMsg) || e);
+                return;
+            }
+            if (!ad) {
+                this._rewardedAdInited = true;
+                this._adConfigInvalid = true;
+                console.error('[Ads] 创建的激励视频广告实例为空');
+                return;
+            }
+            this.rewardedAd = ad;
             this._rewardedAdInited = true;
 
             this.rewardedAd.onLoad(() => {
@@ -164,6 +182,11 @@
             this.adLoading = false;
             this._adLoadPromise = null;
 
+            // 特技链路也使用同一份锁：一并释放（undo/revive 场景这两个字段本为 false/null，
+            // 无副作用），避免切后台后 _specialAdBusy 永久锁死特技入口
+            this._specialAdBusy = false;
+            this._specialPendingItemId = null;
+
             if (msg) {
                 console.warn('[Ads]', msg);
                 this.showHint(msg);
@@ -261,6 +284,9 @@
         grantRewardedEffect(purpose) {
             if (purpose === 'undo') {
                 this.onUndoAdReward();
+            } else if (purpose === 'special') {
+                // 特技专用出口：发放特技条目奖励，绝不能误走复活逻辑
+                this.finishSpecialAd(true);
             } else {
                 this.onAdReward();
             }

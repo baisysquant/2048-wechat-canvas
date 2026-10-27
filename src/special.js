@@ -199,10 +199,12 @@
                     }
                 }
             }
-            if (this._specialFlyers.length) {
+            if (this._specialFlyers.length &&
+                this._specialFlyers.some(f => now - f.startAt >= SPECIAL_BANK_FLY_MS)) {
                 this._specialFlyers = this._specialFlyers.filter(f => now - f.startAt < SPECIAL_BANK_FLY_MS);
             }
-            if (this._specialFloatTexts.length) {
+            if (this._specialFloatTexts.length &&
+                this._specialFloatTexts.some(f => now - f.startAt >= f.duration)) {
                 this._specialFloatTexts = this._specialFloatTexts.filter(f => now - f.startAt < f.duration);
             }
             if (this.specialPanelOpen) {
@@ -263,6 +265,7 @@
             this.specialPanelOpen = true;
             this._specialScroll = 0;
             this._specialScrollDrag = null;
+            if (typeof this.beginDialogTextAnim === 'function') this.beginDialogTextAnim();
         }
 
         , closeSpecialPanel() {
@@ -766,25 +769,32 @@
             this.roundRect(L.panelX, L.panelY, L.panelW, L.panelH, 18);
             ctx.restore();
 
-            // 标题
+            // 标题 + 副标题：弹出时从下方上浮并淡入
+            const anim = (typeof this.dialogTextAnim === 'function')
+                ? this.dialogTextAnim(Date.now())
+                : { t: 1, alpha: 1 };
+            const rise = 36;
+            ctx.save();
+            ctx.globalAlpha = anim.alpha;
             this.drawBolt(L.panelX + 32, L.panelY + 34, 20, '#F2B179');
             ctx.fillStyle = COLORS.text.dark;
             ctx.font = this.getFont('bold', 22);
             ctx.textAlign = 'left';
             ctx.textBaseline = 'middle';
-            ctx.fillText('特技池', L.panelX + 50, L.panelY + 34);
+            ctx.fillText('特技池', L.panelX + 50, L.panelY + 34 + (1 - anim.t) * rise);
 
             ctx.fillStyle = this._specialFreeUsed ? '#9C8B7B' : '#4C9A63';
             ctx.font = this.getFont('normal', 13);
             ctx.fillText(
                 this._specialFreeUsed ? '观看广告，每次 +2048 分' : '本局首次使用免广告',
-                L.panelX + 50, L.panelY + 58
+                L.panelX + 50, L.panelY + 58 + (1 - anim.t) * rise
             );
 
             ctx.fillStyle = '#8C7B6B';
             ctx.font = this.getFont('bold', 18);
             ctx.textAlign = 'right';
-            ctx.fillText(`${count} / ${SPECIAL_CAP}`, L.closeRect.x - 8, L.panelY + 34);
+            ctx.fillText(`${count} / ${SPECIAL_CAP}`, L.closeRect.x - 8, L.panelY + 34 + (1 - anim.t) * rise);
+            ctx.restore();
 
             // 关闭按钮
             ctx.fillStyle = '#9C8B7B';
