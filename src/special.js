@@ -819,14 +819,14 @@
                 ctx.font = this.getFont('normal', 18);
                 ctx.textAlign = 'center';
                 ctx.textBaseline = 'middle';
-                ctx.fillText('暂无特技', L.listX + L.listW / 2, L.listY + L.listH / 2 - 14);
+                
                 ctx.font = this.getFont('normal', 14);
-                ctx.fillText(`合成 ${SPECIAL_TRIGGER_VALUE} 即可获得特技机会`, L.listX + L.listW / 2, L.listY + L.listH / 2 + 16);
+                ctx.fillText(`合成 ${SPECIAL_TRIGGER_VALUE} 赢特技`, L.listX + L.listW / 2, L.listY + L.listH / 2 + 16);
                 // 免广告提示放在"合成 512"下方，保持空态三行纵向连排
                 ctx.fillStyle = this._specialFreeUsed ? '#9C8B7B' : '#4C9A63';
                 ctx.font = this.getFont('normal', 13);
                 ctx.fillText(
-                    this._specialFreeUsed ? '观看广告，每次 +2048 分' : '本局首次使用免广告',
+                    this._specialFreeUsed ? '观看广告，每次 +2048 分' : '首次使用免广告',
                     L.listX + L.listW / 2, L.listY + L.listH / 2 + 46
                 );
             } else {
