@@ -821,13 +821,13 @@
                 ctx.textBaseline = 'middle';
                 
                 ctx.font = this.getFont('normal', 14);
-                ctx.fillText(`合成 ${SPECIAL_TRIGGER_VALUE} 赢特技`, L.listX + L.listW / 2, L.listY + L.listH / 2 + 16);
+                ctx.fillText(`合成 ${SPECIAL_TRIGGER_VALUE} 赢特技`, L.listX + L.listW / 2, L.listY + L.listH / 2 -10 );
                 // 免广告提示放在"合成 512"下方，保持空态三行纵向连排
                 ctx.fillStyle = this._specialFreeUsed ? '#9C8B7B' : '#4C9A63';
                 ctx.font = this.getFont('normal', 13);
                 ctx.fillText(
                     this._specialFreeUsed ? '观看广告，每次 +2048 分' : '首次使用免广告',
-                    L.listX + L.listW / 2, L.listY + L.listH / 2 + 46
+                    L.listX + L.listW / 2, L.listY + L.listH / 2 + 20
                 );
             } else {
                 const now = Date.now();
