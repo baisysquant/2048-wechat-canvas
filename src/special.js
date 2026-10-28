@@ -217,14 +217,19 @@
         }
 
         , pushFloatText(text, x, y, duration, size, rise) {
+            // 统一提示轨迹：所有提示文字一律在「棋盘中心行」出现 → 上浮 → 在「棋盘顶部」消失。
+            // 忽略调用方传入的 x/y/rise，保证任何提示位置一致；棋盘未布局时回退到屏幕中心。
+            const hasBoard = this.boardY != null && this.boardSize > 0;
+            const startY = hasBoard ? this.boardY + this.boardSize / 2 : this.height / 2;
+            const endY = hasBoard ? this.boardY : startY - 64;
             this._specialFloatTexts.push({
                 text,
-                x,
-                y,
+                x: this.width / 2,
+                y: startY,
                 startAt: Date.now(),
                 duration: duration || 1400,
                 size: size || 30,
-                rise: rise == null ? 64 : rise
+                rise: startY - endY
             });
         }
 
@@ -578,12 +583,12 @@
             ctx.globalAlpha = 1;
             this.drawBolt(cx, cy, 18, active ? '#FFF7E6' : '#B7ADA2');
 
-            // 主文案：直接写「特技池」，窄条时略缩小字号
+            // 主文案：直接写「特技池」，在按钮矩形内水平居中，窄条时略缩小字号
             ctx.fillStyle = active ? '#5C4A3A' : '#9C948B';
             ctx.font = this.getFont('bold', rect.w < 210 ? 16 : 18);
-            ctx.textAlign = 'left';
+            ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
-            ctx.fillText('特技池', rect.x + 52, cy);
+            ctx.fillText('特技池', rect.x + rect.w / 2, cy);
 
             ctx.restore();
         }
@@ -781,12 +786,15 @@
             ctx.textBaseline = 'middle';
             ctx.fillText('特技池', L.panelX + 50, L.panelY + 34 + (1 - anim.t) * rise);
 
-            ctx.fillStyle = this._specialFreeUsed ? '#9C8B7B' : '#4C9A63';
-            ctx.font = this.getFont('normal', 13);
-            ctx.fillText(
-                this._specialFreeUsed ? '观看广告，每次 +2048 分' : '本局首次使用免广告',
-                L.panelX + 50, L.panelY + 58 + (1 - anim.t) * rise
-            );
+            // 副标题：仅在有库存时显示（空池时并入列表空态，见下方"合成 512"提示行之下）
+            if (count > 0) {
+                ctx.fillStyle = this._specialFreeUsed ? '#9C8B7B' : '#4C9A63';
+                ctx.font = this.getFont('normal', 13);
+                ctx.fillText(
+                    this._specialFreeUsed ? '观看广告，每次 +2048 分' : '本局首次使用免广告',
+                    L.panelX + 50, L.panelY + 58 + (1 - anim.t) * rise
+                );
+            }
 
             ctx.fillStyle = '#8C7B6B';
             ctx.font = this.getFont('bold', 18);
@@ -814,6 +822,13 @@
                 ctx.fillText('暂无特技', L.listX + L.listW / 2, L.listY + L.listH / 2 - 14);
                 ctx.font = this.getFont('normal', 14);
                 ctx.fillText(`合成 ${SPECIAL_TRIGGER_VALUE} 即可获得特技机会`, L.listX + L.listW / 2, L.listY + L.listH / 2 + 16);
+                // 免广告提示放在"合成 512"下方，保持空态三行纵向连排
+                ctx.fillStyle = this._specialFreeUsed ? '#9C8B7B' : '#4C9A63';
+                ctx.font = this.getFont('normal', 13);
+                ctx.fillText(
+                    this._specialFreeUsed ? '观看广告，每次 +2048 分' : '本局首次使用免广告',
+                    L.listX + L.listW / 2, L.listY + L.listH / 2 + 46
+                );
             } else {
                 const now = Date.now();
                 const busy = this._specialAdBusy;

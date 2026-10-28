@@ -608,7 +608,7 @@ const Game2048 = (function () {
                 this._specialTouchMode = null;
                 this._specialScrollDrag = null;
 
-                // 左上角声音开关：任意状态优先拦截
+                // 声音开关：任意状态优先拦截（位于「最佳」分数框正上方）
                 if (this.pointInRect(touch.clientX, touch.clientY, this.getSoundBtnRect())) {
                     this._soundTouchConsumed = true;
                     return;
@@ -1285,13 +1285,6 @@ const Game2048 = (function () {
         }
 
         drawUI() {
-            this.ctx.fillStyle = COLORS.text.dark;
-            this.ctx.font = this.getFont('bold', TITLE_FONT_SIZE);
-            this.ctx.textAlign = 'left';
-            this.ctx.textBaseline = 'top';
-            // 标题右移 48px，为左上角声音开关按钮让位
-            this.ctx.fillText('2048', TITLE_MARGIN + 48, TITLE_MARGIN);
-
             // 分数组左右均不得超出棋盘边框：贴棋盘右沿排布，窄屏时自动缩窄
             const boardRight = this.boardX + this.boardSize;
             const boxW = Math.min(SCORE_BOX_W, Math.floor((this.boardSize - 8) / 2));
@@ -1302,7 +1295,7 @@ const Game2048 = (function () {
             this.drawScoreBox(rightX - boxW - gap, this.scoreBoxY, '最佳', this.numLabel(this.bestScore, this._bestLabelCache), boxW);
             this.drawSpecialPoolBar();
             this.drawUndoButton();  // 与特技池同一行、位于其左侧
-            this.drawSoundButton(); // 主界面左上角声音开关
+            this.drawSoundButton(); // 声音开关：位于「最佳」分数框正上方
 
             if (DEBUG_SKIP_AD && this.specialPoolRect) {
                 const rect = this.specialPoolRect;

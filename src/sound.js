@@ -1,5 +1,5 @@
 /**
- * 声音模块（WebAudio 合成音效：可爱软软风）+ 主界面左上角声音开关
+ * 声音模块（WebAudio 合成音效：可爱软软风）+ 声音开关（位于「最佳」分数框正上方）
  *
  * 零资源依赖：使用 wx.createWebAudioContext 实时合成短促、偏高音、圆润的音效，
  * 不依赖任何音频文件；基础库不支持 WebAudio 时自动静默降级（游戏照常运行）。
@@ -10,6 +10,13 @@
     'use strict';
 
     const SOUND_SAVE_KEY = 'fk2048_sound_on';
+
+    const C = (typeof require === 'function')
+        ? require('./config.js')
+        : (global && global.FK_CONFIG) || {};
+
+    // 布局依赖：分数组宽度与「分数组/特技池与棋盘」的统一垂直间距
+    const { SCORE_BOX_W, BOARD_ADJACENT_GAP } = C;
 
     const SoundMixin = {
 
@@ -127,12 +134,22 @@
             }
         },
 
-        // ---------- 声音开关按钮（主界面左上角） ----------
+        // ---------- 声音开关按钮（位于「最佳」分数框正上方） ----------
         getSoundBtnRect() {
-            if (!this._soundBtnRect) {
-                this._soundBtnRect = { x: 14, y: 14, w: 40, h: 40 };
-            }
-            return this._soundBtnRect;
+            const w = 40, h = 40;
+            if (!this.boardSize || !this.scoreBoxY) return { x: 14, y: 14, w, h };
+            // 「最佳」分数框位置：与 game.js drawUI 中的 boxW / gap / bestX 计算保持一致
+            const boardRight = this.boardX + this.boardSize;
+            const boxW = Math.min(SCORE_BOX_W, Math.floor((this.boardSize - 8) / 2));
+            const gap = Math.max(8, Math.min(24, this.boardSize - boxW * 2));
+            const bestX = boardRight - boxW - gap - boxW;
+            // 左边界与「最佳」左边界对齐；与「最佳」的间距 = 「最佳」到棋盘的间距（BOARD_ADJACENT_GAP）
+            return {
+                x: bestX,
+                y: this.scoreBoxY - h - BOARD_ADJACENT_GAP,
+                w,
+                h
+            };
         },
 
         drawSoundButton() {
