@@ -6,6 +6,7 @@
  *   special.js 特技加速（闪烁机会 / 特技池 / 广告闭环 / 绘制）
  *   ads.js     微信广告 SDK 初始化 / 加载 / 场景路由
  *   undo.js    后悔回撤（回撤5步 / 免费次数 / 广告生效 / 绘制）
+ *   sound.js   WebAudio 合成音效（可爱软软风）与左上角声音开关
  * 无引擎依赖，包体 < 200KB，直接可在微信开发者工具运行
  */
 
@@ -16,14 +17,16 @@ const FK = (typeof require === 'function')
         Tile: require('./src/tile.js'),
         special: require('./src/special.js'),
         ads: require('./src/ads.js'),
-        undo: require('./src/undo.js')
+        undo: require('./src/undo.js'),
+        sound: require('./src/sound.js')
     }
     : {
         cfg: window.FK_CONFIG,
         Tile: window.FK_TILE,
         special: window.FK_SPECIAL,
         ads: window.FK_ADS,
-        undo: window.FK_UNDO
+        undo: window.FK_UNDO,
+        sound: window.FK_SOUND
     };
 
 const {
@@ -189,7 +192,8 @@ const Game2048 = (function () {
             const o = options || {};
             const msg = String(text);
             const maxW = Math.max(120, this.width - 48);
-            const size = o.size || Math.max(14, Math.min(24, Math.floor(maxW / Math.max(1, msg.length))));
+            // 上浮提示加大一号：下限 16、上限 30
+            const size = o.size || Math.max(16, Math.min(30, Math.floor(maxW / Math.max(1, msg.length))));
             const x = o.x != null ? o.x : this.width / 2;
             const y = o.y != null ? o.y : (this.boardY ? this.boardY - 16 : this.height / 2 - 80);
             if (typeof this.pushFloatText === 'function') {
@@ -221,6 +225,7 @@ const Game2048 = (function () {
             if (DEBUG_SKIP_AD) {
                 console.warn('[调测模式] 已跳过激励视频：复活/特技/回撤奖励直接发放。上线前请将 src/config.js 的 DEBUG_SKIP_AD 改为 false。');
             }
+            this.initSound();   // WebAudio 合成音效 + 声音开关状态
             this.loadDifficultySetting();
             this.loadBestScore();
             this.loadSpecialPool();
@@ -252,6 +257,7 @@ const Game2048 = (function () {
             // 换棋盘重新布局并开局，历史 / 免费次数随 newGame 清空
             this.resize();
             this.newGame();
+            this.soundPlay('click');
             this.trackSpecial('difficulty_select', { gridSize: n });
         }
 
@@ -596,9 +602,17 @@ const Game2048 = (function () {
                 this.touchStartX = touch.clientX;
                 this.touchStartY = touch.clientY;
 
+                this.resumeWebAudio();   // iOS 真机：用户手势后恢复 WebAudio 发声
+                this._soundTouchConsumed = false;
                 this._specialTouchConsumed = false;
                 this._specialTouchMode = null;
                 this._specialScrollDrag = null;
+
+                // 左上角声音开关：任意状态优先拦截
+                if (this.pointInRect(touch.clientX, touch.clientY, this.getSoundBtnRect())) {
+                    this._soundTouchConsumed = true;
+                    return;
+                }
 
                 // 「后悔」按钮：优先拦截（游戏结束弹窗时也可点击）
                 if (this.pointInRect(touch.clientX, touch.clientY, this.undoRect)) {
@@ -626,6 +640,13 @@ const Game2048 = (function () {
                 const x = touch.clientX;
                 const y = touch.clientY;
                 const moved = Math.abs(x - this.touchStartX) > 12 || Math.abs(y - this.touchStartY) > 12;
+
+                // 左上角声音开关：任意状态（含难度选择弹框）都优先响应
+                if (this._soundTouchConsumed) {
+                    if (!moved) this.toggleSound();
+                    this._soundTouchConsumed = false;
+                    return;
+                }
 
                 // 难度选择弹框：点击按钮进入对应棋盘
                 if (this.isState(GameState.IDLE) && this._difficultyButtons) {
@@ -793,6 +814,8 @@ const Game2048 = (function () {
             }
 
             if (moved) {
+                // 音效：有合并播「叮咚」，纯移动播轻快踏步
+                this.soundPlay(scoreGained > 0 ? 'merge' : 'move');
                 // 入回撤历史（上限裁剪）
                 this._undoHistory.push(snapshot);
                 if (this._undoHistory.length > UNDO_HISTORY_CAP) this._undoHistory.shift();
@@ -1158,6 +1181,7 @@ const Game2048 = (function () {
                 if (this.isState(GameState.IDLE)) {
                     this.drawBackground();
                     this.drawDifficultyDialog();
+                    this.drawSoundButton();   // 声音开关画在弹框遮罩之上，始终可点
                     this.drawSpecialFloatTexts(Date.now());
                     return;
                 }
@@ -1265,7 +1289,8 @@ const Game2048 = (function () {
             this.ctx.font = this.getFont('bold', TITLE_FONT_SIZE);
             this.ctx.textAlign = 'left';
             this.ctx.textBaseline = 'top';
-            this.ctx.fillText('2048', TITLE_MARGIN, TITLE_MARGIN);
+            // 标题右移 48px，为左上角声音开关按钮让位
+            this.ctx.fillText('2048', TITLE_MARGIN + 48, TITLE_MARGIN);
 
             // 分数组左右均不得超出棋盘边框：贴棋盘右沿排布，窄屏时自动缩窄
             const boardRight = this.boardX + this.boardSize;
@@ -1277,6 +1302,7 @@ const Game2048 = (function () {
             this.drawScoreBox(rightX - boxW - gap, this.scoreBoxY, '最佳', this.numLabel(this.bestScore, this._bestLabelCache), boxW);
             this.drawSpecialPoolBar();
             this.drawUndoButton();  // 与特技池同一行、位于其左侧
+            this.drawSoundButton(); // 主界面左上角声音开关
 
             if (DEBUG_SKIP_AD && this.specialPoolRect) {
                 const rect = this.specialPoolRect;
@@ -1335,6 +1361,7 @@ const Game2048 = (function () {
         showWinDialog() {
             if (this._overlay) return;
             this.wonShown = true;
+            this.soundPlay('win');
             this._buildOverlay('恭喜获胜!', '达成 2048!', [
                 { text: '继续游戏', color: '#8F7A66', callback: () => { this.wonShown = true; this.setState(GameState.PLAYING); } },
                 { text: '重新开始', color: '#8F7A66', callback: () => { this.newGame(); this.wonShown = false; } }
@@ -1344,6 +1371,7 @@ const Game2048 = (function () {
         showGameOverDialog() {
             if (this._overlay) return;
             this.flushBestScore();
+            this.soundPlay('lose');
             this._buildOverlay('游戏结束', '最终得分: ' + this.score, [
                 { text: '重新开始', color: '#F2B179', callback: () => { this.newGame(); } },
                 { text: '看广告复活', color: '#8F7A66', callback: () => { this.showRewardedAd('revive'); } }
@@ -1447,8 +1475,8 @@ const Game2048 = (function () {
     return Game;
 })();
 
-// ---- 混入功能模块（特技加速 / 广告 / 后悔回撤） ----
-Object.assign(Game2048.prototype, FK.special, FK.ads, FK.undo);
+// ---- 混入功能模块（特技加速 / 广告 / 后悔回撤 / 声音） ----
+Object.assign(Game2048.prototype, FK.special, FK.ads, FK.undo, FK.sound);
 
 // 启动游戏
 const canvas = wx.createCanvas();

@@ -102,6 +102,7 @@
             }
 
             try { if (wx.vibrateShort) wx.vibrateShort({ type: 'light' }); } catch (e) { }
+            this.soundPlay('undo');   // 柔和下滑音
             this.showHint(`↩ 已回撤 ${k} 步` + (suffix ? ` · ${suffix}` : ''));
             this.trackSpecial('undo', { steps: k, freeLeft: this._undoFreeLeft, score: this.score });
         },

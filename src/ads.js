@@ -215,7 +215,7 @@
 
             // 广告位未配置 / 无效：直接降级，绝不进入 loading 或占用 _adPurpose
             if (!this.rewardedAd) {
-                this.showHint('广告暂不可用');
+                this.showHint(purpose === 'undo' ? '广告加载失败，无法回退' : '广告暂不可用');
                 return;
             }
 
@@ -230,7 +230,8 @@
                 try {
                     showResult = this.rewardedAd.show();
                 } catch (e) {
-                    this.failGeneralAd(purpose, '广告播放失败，请稍后重试');
+                    // 悔棋场景：明确提示无法回退
+                    this.failGeneralAd(purpose, purpose === 'undo' ? '广告播放失败，无法回退' : '广告播放失败，请稍后重试');
                     return;
                 }
 
@@ -264,7 +265,7 @@
             clearTimeout(this._adLoadTimer);
             this._adLoadTimer = setTimeout(() => {
                 if (this._adPurpose === purpose) {
-                    this.failGeneralAd(purpose, '广告加载超时，请稍后重试');
+                    this.failGeneralAd(purpose, purpose === 'undo' ? '广告加载失败，无法回退' : '广告加载超时，请稍后重试');
                 }
             }, SPECIAL_AD_LOAD_TIMEOUT);
 
@@ -275,7 +276,7 @@
                 if (loaded && this.rewardedAd) {
                     show();
                 } else {
-                    this.failGeneralAd(purpose, '广告暂不可用，请稍后重试');
+                    this.failGeneralAd(purpose, purpose === 'undo' ? '广告加载失败，无法回退' : '广告暂不可用，请稍后重试');
                 }
             });
         },
@@ -296,6 +297,7 @@
         onAdReward() {
             console.log('复活奖励：继续游戏');
             try { wx.hideLoading(); } catch (e) { }
+            this.soundPlay('reward');   // 复活成功开心上行音
 
             this.clearOverlay();
             this.closeSpecialPanel();

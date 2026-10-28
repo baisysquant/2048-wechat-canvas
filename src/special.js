@@ -138,6 +138,7 @@
                 spawnAt: Date.now()
             };
             this.positionPending();
+            this.soundPlay('special');   // 合成 512 触发特技：三连音
             this.trackSpecial('trigger', { index: this._specialTriggered, gx: cell.x, gy: cell.y });
         }
 
@@ -151,8 +152,9 @@
             });
             this.saveSpecialPool();
             this._specialFlyers.push({ x, y, startAt: Date.now() });
+            this.soundPlay('bank');   // 入池轻「啵」
             if (fromClick) {
-                this.pushFloatText('⚡ 特技已入池', this.width / 2, this.specialPoolRect.y - 18, 1100, 20);
+                this.pushFloatText('⚡ 特技已入池', this.width / 2, this.specialPoolRect.y - 18, 1100, 26);
             }
             return true;
         }
@@ -168,7 +170,8 @@
 
         , grantOverflowSpecialReward() {
             this.addScore(SPECIAL_REWARD);
-            this.pushFloatText('⚡ 特技池已满，已自动兑现 +2048', this.width / 2, this.height / 2, 1600, 24);
+            this.soundPlay('reward');
+            this.pushFloatText('⚡ 特技池已满，已自动兑现 +2048', this.width / 2, this.height / 2, 1600, 30);
             this.trackSpecial('bank_overflow_direct_reward', { score: this.score });
         }
 
@@ -220,7 +223,7 @@
                 y,
                 startAt: Date.now(),
                 duration: duration || 1400,
-                size: size || 26,
+                size: size || 30,
                 rise: rise == null ? 64 : rise
             });
         }
@@ -508,9 +511,10 @@
 
             this.addScore(SPECIAL_REWARD);
             this.trackSpecial('reward', { score: this.score, remain: this.specialPool.length, free: !!isFree });
+            this.soundPlay('reward');
             this.pushFloatText(
                 isFree ? '🎁 +2048 首次特技免费！' : '🚀 +2048 特技加速！',
-                this.width / 2, this.height / 2, 1500, 28
+                this.width / 2, this.height / 2, 1500, 34
             );
 
             try {
@@ -539,6 +543,7 @@
         }
 
         // 特技池入口条（已缩短，左侧由「后悔」按钮占位，两者同行且不超出棋盘边框）
+        // 主界面只显示「⚡ 特技池」，不再显示 [ 库存 / 10 ]；库存数量在弹窗右上角可见
         , drawSpecialPoolBar() {
             const rect = this.specialPoolRect;
             if (!rect) return;
@@ -550,7 +555,6 @@
             const pulse = 0.5 + 0.5 * Math.sin(now / 320);
             const cx = rect.x + 28;
             const cy = rect.y + rect.h / 2;
-            const compact = rect.w < 210;  // 缩短后的紧凑布局：省略「特技池」文字
 
             ctx.save();
 
@@ -564,6 +568,7 @@
             ctx.fillStyle = active ? '#F2B179' : '#E4DDD4';
             this.roundRect(rect.x, rect.y, rect.w, rect.h, rect.h / 2);
 
+            // 闪电图标（左侧圆底）
             ctx.globalAlpha = active ? 0.95 : 0.55;
             ctx.fillStyle = active ? 'rgba(255,255,255,0.3)' : 'rgba(255,255,255,0.5)';
             ctx.beginPath();
@@ -573,19 +578,12 @@
             ctx.globalAlpha = 1;
             this.drawBolt(cx, cy, 18, active ? '#FFF7E6' : '#B7ADA2');
 
-            if (!compact) {
-                ctx.fillStyle = active ? '#5C4A3A' : '#9C948B';
-                ctx.font = this.getFont('bold', 18);
-                ctx.textAlign = 'left';
-                ctx.textBaseline = 'middle';
-                ctx.fillText('特技池', rect.x + 52, cy);
-            }
-
-            ctx.fillStyle = active ? '#FFFFFF' : '#9C948B';
-            ctx.font = this.getFont('bold', 20);
-            ctx.textAlign = 'right';
+            // 主文案：直接写「特技池」，窄条时略缩小字号
+            ctx.fillStyle = active ? '#5C4A3A' : '#9C948B';
+            ctx.font = this.getFont('bold', rect.w < 210 ? 16 : 18);
+            ctx.textAlign = 'left';
             ctx.textBaseline = 'middle';
-            ctx.fillText(`[ ${count} / ${SPECIAL_CAP} ]`, rect.x + rect.w - 20, cy);
+            ctx.fillText('特技池', rect.x + 52, cy);
 
             ctx.restore();
         }
